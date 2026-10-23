@@ -249,9 +249,11 @@ BufferMemoryHandle::BufferMemoryHandle(void* memory, size_t size, size_t mappedC
     , m_initial(initial)
     , m_maximum(maximum)
 {
-    if (sharingMode == MemorySharingMode::Default && mode == MemoryMode::BoundsChecking)
-        ASSERT(mappedCapacity == size);
-    else {
+    if (sharingMode == MemorySharingMode::Default && mode == MemoryMode::BoundsChecking) {
+        // A mapping is made in whole OS pages, so a wasm memory whose own pages are smaller is mapped
+        // past its exact size. The excess is reserved for growth and is never wasm-visible.
+        ASSERT(mappedCapacity >= size);
+    } else {
 #if ENABLE(WEBASSEMBLY)
         Wasm::activateSignalingMemory();
 #endif
@@ -297,9 +299,13 @@ BufferMemoryHandle::~BufferMemoryHandle()
         case MemoryMode::BoundsChecking: {
             switch (m_sharingMode) {
             case MemorySharingMode::Default: {
-                if (memory == nullBasePointer() && !m_size)
+                if (memory == nullBasePointer() && !m_mappedCapacity) {
+                    ASSERT(!m_size);
                     return;
-                Gigacage::freeVirtualPages(Gigacage::Primitive, memory, m_size);
+                }
+                // What was mapped is what must be released; m_size may be smaller, and may have moved
+                // since, when the memory's own pages are smaller than an OS page.
+                Gigacage::freeVirtualPages(Gigacage::Primitive, memory, m_mappedCapacity);
                 break;
             }
             case MemorySharingMode::Shared: {
